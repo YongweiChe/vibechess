@@ -569,11 +569,13 @@ export default function CreateGame() {
     setReasoning(reasoningText);
 
     if (options.mode === "create") {
-      if (result.suggestedName && !name) {
-        setName(result.suggestedName);
+      // Use functional updates so we always respect the latest user input
+      // and only fall back to suggested values when the fields are still empty.
+      if (result.suggestedName) {
+        setName((current) => (current && current.trim() ? current : result.suggestedName!));
       }
-      if (result.suggestedDescription && !description) {
-        setDescription(result.suggestedDescription);
+      if (result.suggestedDescription) {
+        setDescription((current) => (current && current.trim() ? current : result.suggestedDescription!));
       }
 
       const previewName =

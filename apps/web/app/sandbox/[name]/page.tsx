@@ -115,8 +115,45 @@ export default function SandboxPage() {
         reasoning: data.reasoning
       }]);
 
-      // Update the code
-      setGameCode(data.code);
+      // Update the code safely:
+      // - If the API returned full code, use it.
+      // - If it returned structured edits, apply them to the existing code.
+      // - Never set the code to undefined/null (which would break later saves).
+      if (typeof data.code === "string" && data.code.trim()) {
+        setGameCode(data.code);
+      } else if (Array.isArray(data.edits) && data.edits.length > 0 && typeof gameCode === "string") {
+        try {
+          let nextCode = gameCode;
+          for (const edit of data.edits) {
+            const start_at = edit?.find?.start_at;
+            const end_at = edit?.find?.end_at;
+            const replace_with = edit?.replace_with ?? "";
+
+            if (!start_at || !end_at) continue;
+
+            const startIndex = nextCode.indexOf(start_at);
+            if (startIndex === -1) {
+              console.warn("Sandbox edit start_at not found in code:", start_at);
+              continue;
+            }
+
+            const endIndex = nextCode.indexOf(end_at, startIndex + start_at.length);
+            if (endIndex === -1) {
+              console.warn("Sandbox edit end_at not found in code:", end_at);
+              continue;
+            }
+
+            const endOfMatch = endIndex + end_at.length;
+            nextCode = nextCode.slice(0, startIndex) + replace_with + nextCode.slice(endOfMatch);
+          }
+
+          setGameCode(nextCode);
+        } catch (e) {
+          console.error("Failed to apply edits in sandbox, keeping original code:", e);
+        }
+      } else {
+        console.warn("Sandbox: generate-game response had no code or edits; keeping existing code.");
+      }
     } catch (err: any) {
       setError(err.message || "Failed to generate code");
       setChatMessages(prev => [...prev, {

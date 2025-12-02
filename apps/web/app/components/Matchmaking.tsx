@@ -91,18 +91,31 @@ export function Matchmaking({
 
             const data = await statusResponse.json();
 
+            // Once we've been matched, ignore any further polling results.
+            // The interval will be cleared when we transition into the matched state.
+            if (status === 'matched') {
+              return;
+            }
+
             if (data.status === 'not_in_queue') {
-              // Server cleaned us up - show error and exit
-              if (pollIntervalRef.current) {
-                clearInterval(pollIntervalRef.current);
-                pollIntervalRef.current = null;
+              // Only treat this as an error while we're actively searching.
+              if (status === 'searching') {
+                if (pollIntervalRef.current) {
+                  clearInterval(pollIntervalRef.current);
+                  pollIntervalRef.current = null;
+                }
+                setStatus('error');
+                setErrorMessage('Matchmaking timed out. Your opponent may have disconnected. Please try again.');
               }
-              setStatus('error');
-              setErrorMessage('Matchmaking timed out. Your opponent may have disconnected. Please try again.');
               return;
             }
 
             if (data.status === 'matched' && data.roomId) {
+              // We have a match: stop polling and transition into the matched state.
+              if (pollIntervalRef.current) {
+                clearInterval(pollIntervalRef.current);
+                pollIntervalRef.current = null;
+              }
               setStatus('matched');
 
               // Play notification sound

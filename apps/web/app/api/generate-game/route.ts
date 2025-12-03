@@ -129,32 +129,19 @@ export async function POST(request: Request) {
 
     // Different prompts for edit mode vs new game mode
     let systemPrompt = isEditMode
-      ? `You are a game developer assistant. Modify the existing game code based on the user's request by returning a JSON description of edits, not the full file.
+      ? `You are a game developer assistant. Modify the existing game code based on the user's request by returning a COMPLETE, UPDATED VERSION of the game code (not a diff).
 
 IMPORTANT:
 1. Keep the same structure (initGameClient and serverLogic).
 2. Make ONLY the changes requested by the user.
 3. Preserve existing functionality unless specifically asked to change it.
-4. The code must remain valid JavaScript after applying your edits.
-5. Instead of returning the full file, you MUST return a JSON object with this exact shape:
+4. The code must remain valid JavaScript after your edits.
+5. You must return a JSON object with this exact shape:
 
 {
   "explanation": "Brief explanation of what you're doing and why (2-3 sentences)",
-  "edits": [
-    {
-      "find": {
-        "start_at": "function foo() {",
-        "end_at": "}"
-      },
-      "replace_with": "function foo() {\\n  console.log('hi');\\n}"
-    }
-  ]
+  "code": "THE FULL UPDATED GAME CODE HERE"
 }
-
-6. "find.start_at" and "find.end_at" should be short substrings that uniquely identify the start and end of the region to replace.
-7. The actual code in the file may have slightly different spacing, indentation, or line breaks compared to what you see. Be careful with how you space things and do NOT assume the formatting is exactly the same.
-8. Choose robust snippets that are unlikely to change and avoid relying on exact whitespace. Do NOT include leading or trailing spaces or indentation in "start_at" or "end_at"—focus on the core tokens.
-9. "replace_with" must be the complete replacement text for the region between "start_at" and "end_at".
 
 Existing code:
 \`\`\`javascript
@@ -166,7 +153,7 @@ ${chatHistory.map((msg: any) => `${msg.role === 'user' ? 'User' : 'Assistant'}: 
 
 User request: ${description}
 
-Return ONLY the JSON object with "explanation" and "edits".`
+Return ONLY the JSON object with "explanation" and "code".`
       : `You are a game developer. Generate complete, working game code.
 
 ## by default, you do the bare minimum, don't. if you have to generate some pre-written text, generate lots of funny variations, not just a few.
@@ -327,42 +314,13 @@ ${templateConfig?.baseCode || ''}`;
                   description:
                     "Brief explanation of what you're doing and why (2-3 sentences)",
                 },
-                edits: {
-                  type: "array",
+                code: {
+                  type: "string",
                   description:
-                    "List of targeted edits to apply to the existing code.",
-                  items: {
-                    type: "object",
-                    properties: {
-                      find: {
-                        type: "object",
-                        properties: {
-                          start_at: {
-                            type: "string",
-                            description:
-                              "Short substring marking the start of the region to replace.",
-                          },
-                          end_at: {
-                            type: "string",
-                            description:
-                              "Short substring marking the end of the region to replace.",
-                          },
-                        },
-                        required: ["start_at", "end_at"],
-                        additionalProperties: false,
-                      },
-                      replace_with: {
-                        type: "string",
-                        description:
-                          "Complete replacement text for the region between start_at and end_at.",
-                      },
-                    },
-                    required: ["find", "replace_with"],
-                    additionalProperties: false,
-                  },
+                    "The complete updated game code after applying the requested edits.",
                 },
               },
-              required: ["explanation", "edits"],
+              required: ["explanation", "code"],
               additionalProperties: false,
             },
           }
@@ -449,7 +407,7 @@ ${templateConfig?.baseCode || ''}`;
         try {
           const parsed = JSON.parse(textBlock.text) as GameGenerationResponse;
           if (isEditMode) {
-            edits = parsed.edits || [];
+            generatedCode = parsed.code || "";
             explanation = parsed.explanation || "";
           } else {
             generatedCode = parsed.code || "";
@@ -461,13 +419,13 @@ ${templateConfig?.baseCode || ''}`;
           }
         } catch (e) {
           console.error("Failed to parse Claude structured output:", e);
+          const extracted = extractCode(textBlock.text);
           if (isEditMode) {
-            const extracted = extractCode(textBlock.text);
             generatedCode = extracted || existingCode || "";
             explanation =
               "Error parsing response, using full code fallback extracted from text.";
           } else {
-            generatedCode = extractCode(textBlock.text);
+            generatedCode = extracted || templateConfig?.baseCode || "";
             explanation = "Error parsing response, extracted code from text.";
           }
         }
@@ -477,84 +435,59 @@ ${templateConfig?.baseCode || ''}`;
        // Use Gemini (Google) with proper Structured Outputs
        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
        
-       // Define JSON Schema for structured output
-       const jsonSchema = isEditMode
-         ? {
-             type: SchemaType.OBJECT,
-             properties: {
-               explanation: {
-                 type: SchemaType.STRING,
-                 description:
-                   "Brief explanation of what you're doing and why (2-3 sentences)",
-               },
-               edits: {
-                 type: SchemaType.ARRAY,
-                 description:
-                   "List of targeted edits to apply to the existing code.",
-                 items: {
-                   type: SchemaType.OBJECT,
-                   properties: {
-                     find: {
-                       type: SchemaType.OBJECT,
-                       properties: {
-                         start_at: {
-                           type: SchemaType.STRING,
-                           description:
-                             "Short substring marking the start of the region to replace.",
-                         },
-                         end_at: {
-                           type: SchemaType.STRING,
-                           description:
-                             "Short substring marking the end of the region to replace.",
-                         },
-                       },
-                     },
-                     replace_with: {
-                       type: SchemaType.STRING,
-                       description:
-                         "Complete replacement text for the region between start_at and end_at.",
-                     },
-                   },
-                 },
-               },
-             },
-             required: ["explanation", "edits"],
-           }
-             : {
-             type: SchemaType.OBJECT,
-             properties: {
-               explanation: {
-                 type: SchemaType.STRING,
-                 description:
-                   "Brief explanation of what you're doing and why (2-3 sentences)",
-               },
-               code: {
-                 type: SchemaType.STRING,
-                 description: "The complete game code in the specified format",
-               },
-               min_players_per_room: {
-                 type: SchemaType.NUMBER,
-                 description:
-                   "Minimum number of players required to start a room. Default 2.",
-               },
-               max_players_per_room: {
-                 type: SchemaType.NUMBER,
-                 description:
-                   "Maximum number of players allowed in a single room. Default 2.",
-               },
-               has_win_condition: {
-                 type: SchemaType.BOOLEAN,
-                 description:
-                   "Whether the game has a hard win condition that ends the round (true/false). Default true.",
-               },
-               can_join_late: {
-                 type: SchemaType.BOOLEAN,
-                 description:
-                   "Whether new players are allowed to join a room after it has started (true/false). Default false.",
-               },
-             },
-             required: ["explanation", "code", "min_players_per_room", "max_players_per_room", "has_win_condition", "can_join_late"],
-           };
+      // Define JSON Schema for structured output
+      const jsonSchema = isEditMode
+        ? {
+            type: SchemaType.OBJECT,
+            properties: {
+              explanation: {
+                type: SchemaType.STRING,
+                description:
+                  "Brief explanation of what you're doing and why (2-3 sentences)",
+              },
+              code: {
+                type: SchemaType.STRING,
+                description:
+                  "The complete updated game code after applying the requested edits.",
+              },
+            },
+            required: ["explanation", "code"],
+          }
+        : {
+            type: SchemaType.OBJECT,
+            properties: {
+              explanation: {
+                type: SchemaType.STRING,
+                description:
+                  "Brief explanation of what you're doing and why (2-3 sentences)",
+              },
+              code: {
+                type: SchemaType.STRING,
+                description: "The complete game code in the specified format",
+              },
+              min_players_per_room: {
+                type: SchemaType.NUMBER,
+                description:
+                  "Minimum number of players required to start a room. Default 2.",
+              },
+              max_players_per_room: {
+                type: SchemaType.NUMBER,
+                description:
+                  "Maximum number of players allowed in a single room. Default 2.",
+              },
+              has_win_condition: {
+                type: SchemaType.BOOLEAN,
+                description:
+                  "Whether the game has a hard win condition that ends the round (true/false). Default true.",
+              },
+              can_join_late: {
+                type: SchemaType.BOOLEAN,
+                description:
+                  "Whether new players are allowed to join a room after it has started (true/false). Default false.",
+              },
+            },
+            required: ["explanation", "code", "min_players_per_room", "max_players_per_room", "has_win_condition", "can_join_late"],
+          };
        
        const model = genAI.getGenerativeModel({ 
        model: selectedModel,
@@ -598,31 +531,31 @@ ${templateConfig?.baseCode || ''}`;
          }
          explanation = "Error: Model returned no content. Using fallback.";
        } else {
-         try {
-           const parsed = JSON.parse(responseText) as GameGenerationResponse;
-           if (isEditMode) {
-             edits = parsed.edits || [];
-             explanation = parsed.explanation || "";
-           } else {
-             generatedCode = parsed.code || "";
-             explanation = parsed.explanation || "";
-             minPlayersPerRoom = parsed.min_players_per_room;
-             maxPlayersPerRoom = parsed.max_players_per_room;
-             hasWinCondition = parsed.has_win_condition;
-             canJoinLate = parsed.can_join_late;
-           }
-         } catch (e) {
-           console.error("Failed to parse Gemini structured output:", e);
-           if (isEditMode) {
-             const extracted = extractCode(responseText);
-             generatedCode = extracted || existingCode || "";
-             explanation =
-               "Error parsing response, using full code fallback extracted from text.";
-           } else {
-             generatedCode = extractCode(responseText);
-             explanation = "Error parsing response, extracted code from text.";
-           }
-         }
+        try {
+          const parsed = JSON.parse(responseText) as GameGenerationResponse;
+          if (isEditMode) {
+            generatedCode = parsed.code || "";
+            explanation = parsed.explanation || "";
+          } else {
+            generatedCode = parsed.code || "";
+            explanation = parsed.explanation || "";
+            minPlayersPerRoom = parsed.min_players_per_room;
+            maxPlayersPerRoom = parsed.max_players_per_room;
+            hasWinCondition = parsed.has_win_condition;
+            canJoinLate = parsed.can_join_late;
+          }
+        } catch (e) {
+          console.error("Failed to parse Gemini structured output:", e);
+          const extracted = extractCode(responseText);
+          if (isEditMode) {
+            generatedCode = extracted || existingCode || "";
+            explanation =
+              "Error parsing response, using full code fallback extracted from text.";
+          } else {
+            generatedCode = extracted || templateConfig?.baseCode || "";
+            explanation = "Error parsing response, extracted code from text.";
+          }
+        }
        }
 
     } else {
@@ -640,10 +573,13 @@ ${templateConfig?.baseCode || ''}`;
     console.log(`[Generate Game ${requestId}] Model explanation:`, explanation);
     console.log(`[Generate Game ${requestId}] ========== REQUEST END at ${new Date().toISOString()} ==========`);
 
-    // Edit mode: return edits (preferred) or fallback code
+    // Edit mode: always return full updated code
     if (isEditMode) {
+      if (!generatedCode) {
+        generatedCode = existingCode || "";
+      }
       return NextResponse.json({
-        ...(edits.length > 0 ? { edits } : { code: generatedCode }),
+        code: generatedCode,
         explanation,
         reasoning: reasoning.substring(0, 1000), // Limit reasoning to first 1000 chars for response
       });
@@ -754,7 +690,7 @@ async function streamOpenAIResponse(params: OpenAIStreamParams) {
               type: "json_schema" as const,
               name: "game_edit_response",
               strict: true,
-            schema: {
+              schema: {
                 type: "object",
                 properties: {
                   explanation: {
@@ -762,42 +698,13 @@ async function streamOpenAIResponse(params: OpenAIStreamParams) {
                     description:
                       "Brief explanation of what you're doing and why (2-3 sentences)",
                   },
-                  edits: {
-                    type: "array",
+                  code: {
+                    type: "string",
                     description:
-                      "List of targeted edits to apply to the existing code.",
-                    items: {
-                      type: "object",
-                      properties: {
-                        find: {
-                          type: "object",
-                          properties: {
-                            start_at: {
-                              type: "string",
-                              description:
-                                "Short substring marking the start of the region to replace.",
-                            },
-                            end_at: {
-                              type: "string",
-                              description:
-                                "Short substring marking the end of the region to replace.",
-                            },
-                          },
-                          required: ["start_at", "end_at"],
-                          additionalProperties: false,
-                        },
-                        replace_with: {
-                          type: "string",
-                          description:
-                            "Complete replacement text for the region between start_at and end_at.",
-                        },
-                      },
-                      required: ["find", "replace_with"],
-                      additionalProperties: false,
-                    },
+                      "The complete updated game code after applying the requested edits.",
                   },
                 },
-                required: ["explanation", "edits"],
+                required: ["explanation", "code"],
                 additionalProperties: false,
               },
             }
@@ -816,29 +723,36 @@ async function streamOpenAIResponse(params: OpenAIStreamParams) {
                   code: {
                     type: "string",
                     description: "The complete game code",
-                },
-                min_players_per_room: {
-                  type: "integer",
-                  description:
-                    "Minimum number of players required to start a room. Default 2.",
-                },
-                max_players_per_room: {
-                  type: "integer",
-                  description:
-                    "Maximum number of players allowed in a single room. Default 2.",
-                },
-                has_win_condition: {
-                  type: "boolean",
-                  description:
-                    "Whether the game has a hard win condition that ends the round (true/false). Default true.",
-                },
-                can_join_late: {
-                  type: "boolean",
-                  description:
-                    "Whether new players are allowed to join a room after it has started (true/false). Default false.",
+                  },
+                  min_players_per_room: {
+                    type: "integer",
+                    description:
+                      "Minimum number of players required to start a room. Default 2.",
+                  },
+                  max_players_per_room: {
+                    type: "integer",
+                    description:
+                      "Maximum number of players allowed in a single room. Default 2.",
+                  },
+                  has_win_condition: {
+                    type: "boolean",
+                    description:
+                      "Whether the game has a hard win condition that ends the round (true/false). Default true.",
+                  },
+                  can_join_late: {
+                    type: "boolean",
+                    description:
+                      "Whether new players are allowed to join a room after it has started (true/false). Default false.",
                   },
                 },
-                required: ["explanation", "code", "min_players_per_room", "max_players_per_room", "has_win_condition", "can_join_late"],
+                required: [
+                  "explanation",
+                  "code",
+                  "min_players_per_room",
+                  "max_players_per_room",
+                  "has_win_condition",
+                  "can_join_late",
+                ],
                 additionalProperties: false,
               },
             };
@@ -905,7 +819,6 @@ async function streamOpenAIResponse(params: OpenAIStreamParams) {
           0,
           1000
         );
-        let edits: CodeEdit[] = [];
         let minPlayersPerRoom: number | undefined =
           parsedPayload?.min_players_per_room;
         let maxPlayersPerRoom: number | undefined =
@@ -915,24 +828,12 @@ async function streamOpenAIResponse(params: OpenAIStreamParams) {
         let canJoinLate: boolean | undefined = parsedPayload?.can_join_late;
 
         if (isEditMode) {
-          if (parsedPayload?.edits && parsedPayload.edits.length > 0) {
-            edits = parsedPayload.edits;
-          } else {
-            const extracted = extractCode(
-              finalResponse.output_text || aggregatedJson || ""
-            );
-            generatedCode = extracted || fallbackCode;
-            if (!explanation) {
-              explanation = extracted
-                ? "Parsed full code from the model output as fallback."
-                : "Model returned no edits. Using fallback code.";
-            }
-          }
+          generatedCode = parsedPayload?.code || "";
         } else {
           generatedCode = parsedPayload?.code || "";
         }
 
-        if (!isEditMode && !generatedCode) {
+        if (!generatedCode) {
           const extracted = extractCode(finalResponse.output_text || aggregatedJson || "");
           generatedCode = extracted || fallbackCode;
           if (!explanation) {
@@ -942,11 +843,8 @@ async function streamOpenAIResponse(params: OpenAIStreamParams) {
           }
         }
 
-        if (!isEditMode && !generatedCode) {
+        if (!generatedCode) {
           throw new Error("Model did not return any code.");
-        }
-        if (isEditMode && edits.length === 0 && !generatedCode) {
-          throw new Error("Model did not return any edits or code.");
         }
 
         if (!reasoning && streamedReasoning) {
@@ -968,11 +866,7 @@ async function streamOpenAIResponse(params: OpenAIStreamParams) {
         };
 
         if (isEditMode) {
-          if (edits.length > 0) {
-            resultPayload.edits = edits;
-          } else {
-            resultPayload.code = generatedCode;
-          }
+          resultPayload.code = generatedCode;
         } else {
           // Apply safe defaults if the model omitted config fields
           const safeMinPlayers =

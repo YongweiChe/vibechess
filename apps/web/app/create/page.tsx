@@ -94,6 +94,9 @@ export default function CreateGame() {
   const [maxPlayersPerRoom, setMaxPlayersPerRoom] = useState<number>(2);
   const [hasWinCondition, setHasWinCondition] = useState<boolean>(true);
   const [canJoinLate, setCanJoinLate] = useState<boolean>(false);
+  // Track whether the user has explicitly customized room settings so we don't
+  // overwrite them with model suggestions on subsequent generations.
+  const [roomConfigLockedByUser, setRoomConfigLockedByUser] = useState(false);
   const [previewGameName, setPreviewGameName] = useState<string>("");
   const [previewRoomId, setPreviewRoomId] = useState(() => `room-${Math.random().toString(36).substring(7)}`);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -547,20 +550,25 @@ export default function CreateGame() {
       }
       nextCode = result.code;
 
-      // Only update config on create; for edit we keep existing values unless model explicitly supports them later
-      setMinPlayersPerRoom(nextMinPlayers);
-      setMaxPlayersPerRoom(nextMaxPlayers);
-      setHasWinCondition(nextHasWinCondition);
-      setCanJoinLate(nextCanJoinLate);
+      // Only update config on create if the user hasn't already customized it.
+      // Once the user touches min/max players or win condition toggles, their
+      // choices should always override what the model decides.
+      if (!roomConfigLockedByUser) {
+        setMinPlayersPerRoom(nextMinPlayers);
+        setMaxPlayersPerRoom(nextMaxPlayers);
+        setHasWinCondition(nextHasWinCondition);
+        setCanJoinLate(nextCanJoinLate);
+      }
     } else {
-      const baseCode = options.originalCode ?? generatedCode;
-
-      if (baseCode && result.edits && result.edits.length > 0) {
-        nextCode = applyEditsToCode(baseCode, result.edits);
-      } else if (result.code) {
-        nextCode = result.code;
+      // Edit mode: the API now always returns full updated code.
+      if (!result.code) {
+        const baseCode = options.originalCode ?? generatedCode;
+        if (!baseCode) {
+          throw new Error("Model did not return any code.");
+        }
+        nextCode = baseCode;
       } else {
-        throw new Error("Model did not return any edits or code.");
+        nextCode = result.code;
       }
     }
 
@@ -1396,6 +1404,7 @@ export default function CreateGame() {
                   max={16}
                   value={minPlayersPerRoom}
                   onChange={(e) => {
+                    setRoomConfigLockedByUser(true);
                     const value = parseInt(e.target.value || "1", 10);
                     const nextMin = Math.max(1, Math.min(16, value));
                     setMinPlayersPerRoom(nextMin);
@@ -1412,6 +1421,7 @@ export default function CreateGame() {
                   max={16}
                   value={maxPlayersPerRoom}
                   onChange={(e) => {
+                    setRoomConfigLockedByUser(true);
                     const value = parseInt(e.target.value || "1", 10);
                     const raw = Math.max(1, Math.min(16, value));
                     const nextMax = Math.max(minPlayersPerRoom, raw);
@@ -1424,7 +1434,10 @@ export default function CreateGame() {
                 <input
                   type="checkbox"
                   checked={hasWinCondition}
-                  onChange={(e) => setHasWinCondition(e.target.checked)}
+                  onChange={(e) => {
+                    setRoomConfigLockedByUser(true);
+                    setHasWinCondition(e.target.checked);
+                  }}
                   className="h-3 w-3 rounded border-gray-600 bg-gray-900 text-purple-500 focus:ring-purple-500"
                 />
                 <span className="text-gray-400">Has win condition</span>
@@ -1433,7 +1446,10 @@ export default function CreateGame() {
                 <input
                   type="checkbox"
                   checked={canJoinLate}
-                  onChange={(e) => setCanJoinLate(e.target.checked)}
+                  onChange={(e) => {
+                    setRoomConfigLockedByUser(true);
+                    setCanJoinLate(e.target.checked);
+                  }}
                   className="h-3 w-3 rounded border-gray-600 bg-gray-900 text-purple-500 focus:ring-purple-500"
                 />
                 <span className="text-gray-400">Allow late join</span>
